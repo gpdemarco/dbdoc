@@ -20,22 +20,106 @@ namespace Wellhub
     /// Service endpoint and authorization key for the database must be set in the configuration file of the calling program.
     /// Collection selfID must also be set for this version of the program.  
     /// </summary>
-    public class DocHandler 
+    public class DocHandler
     {
-        private static DocumentClient client;               // document client used for querying
+        private static DocumentClient client;
         const string ENDPT = "serviceEndpoint";             // Azure service endpoint for DocumentDB - used to read app.config variable
         const string AUTHKEY = "authKey";                   // Azure authorization key for DocumentDB - used to read app.config variable
         const string COLL_SELFID = "collectionSelfID";      // collection in DocumentDB - used to read app.config variable
-        //const string DBNAME = "database";                   // database in DocumentDB - used to read app.config variable
-        //const string COLLNAME = "collection";               // collection in DocumentDB - used to read app.config variable
-        
+                                                            //const string DBNAME = "database";                   // database in DocumentDB - used to read app.config variable
+                                                            //const string COLLNAME = "collection";               // collection in DocumentDB - used to read app.config variable
+
         //variable to hold collection ID
         private static string collID = ConfigurationManager.AppSettings[COLL_SELFID];
 
         /// <summary>
         /// Returns the collection ID
         /// </summary>
-        public static string CollectionID { get { return collID; }  }
+        public static string CollectionID { get { return collID; } }
+
+        private static DocumentClient Client
+        {
+            get
+            {
+                if (client == null)
+                {
+                    const string DOC_ERR_MSG = "The Document Client could not be created from stored credentials.  ";
+                    const string END_PT_MSG = "The DocumentDB end point is not specified.  ";
+                    const string AUTH_KEY_MSG = "The DocumentDB authorization key is not specified.  ";
+                    const string AGG_ERR_MSG = " Errors Occurred. ";
+                    const string STAT_TEXT = ", StatusCode: ";
+                    const string ACT_TEXT = ", Activity id: ";
+                    const string ERR_TYPE = "Error type: ";
+                    const string MSG_TEXT = ", Message: ";
+                    const string BASE_MSG_TEXT = ", BaseMessage: ";
+
+                    try
+                    {
+                        // create an instance of DocumentClient from from settings in config file
+                        client = new DocumentClient(new Uri(ConfigurationManager.AppSettings[ENDPT]),
+                                    ConfigurationManager.AppSettings[AUTHKEY]);
+                    }
+                    catch (DocumentClientException docEx)
+                    {
+                        //if endpoint not specified throw an error 
+                        if (string.IsNullOrEmpty(ConfigurationManager.AppSettings[ENDPT]))
+                        {
+                            throw new ApplicationException(END_PT_MSG);
+                        }
+
+                        //if authkey not specified throw an error 
+                        if (string.IsNullOrEmpty(ConfigurationManager.AppSettings[AUTHKEY]))
+                        {
+                            throw new ApplicationException(AUTH_KEY_MSG);
+                        }
+
+                        // get base exception 
+                        Exception baseException = docEx.GetBaseException();
+
+                        // create application exception
+                        ApplicationException appEx = new ApplicationException(string.Concat(DOC_ERR_MSG, STAT_TEXT, docEx.StatusCode,
+                            ACT_TEXT, docEx.ActivityId, MSG_TEXT, docEx.Message, BASE_MSG_TEXT, baseException.Message), baseException);
+
+                        //throw the error
+                        throw appEx;
+                    }
+                    catch (AggregateException aggEx)
+                    {
+                        // create error message
+                        var msg = string.Concat(aggEx.InnerExceptions.Count, AGG_ERR_MSG);
+
+                        // for each exception
+                        foreach (var ex in aggEx.InnerExceptions)
+                        {
+                            // try casting as document client exception
+                            DocumentClientException docEx = ex as DocumentClientException;
+
+                            // if success
+                            if (docEx != null)
+                            {
+                                // append document client message
+                                msg = string.Concat(msg, "[", DOC_ERR_MSG, STAT_TEXT, docEx.StatusCode,
+                            ACT_TEXT, docEx.ActivityId, MSG_TEXT, docEx.Message, BASE_MSG_TEXT, ex.GetBaseException().Message, "]");
+                            }
+                            else
+                            {
+                                //append other message
+                                msg = string.Concat(msg, "[", ERR_TYPE, ex.GetType(), MSG_TEXT, docEx.Message, "]");
+                            }
+                        }
+
+                        //throw the error
+                        throw new ApplicationException(msg, aggEx);
+                    }
+                    catch (Exception ex)
+                    {
+                        //throw the error
+                        throw new ApplicationException(string.Concat(ERR_TYPE, ex.GetType(), MSG_TEXT, ex.Message), ex);
+                    }
+                }
+                return client;
+            }
+        }
 
         static void Main(string[] args) { }
 
@@ -48,17 +132,17 @@ namespace Wellhub
         public async Task<WHResponse> AddDocAsync(object newDoc)
         {
             //WHResponse messages
-            const string DOC_NULL       = "The document to be added is empty.  ";
-            const string BAD_STRING     = "Invalid string passed, will not serialize to JSON or XML. Raw string should be JSON or XML syntax.";
-            const string BAD_COLL_ID    = "Cannot open document collection with collection ID given: ";
+            const string DOC_NULL = "The document to be added is empty.  ";
+            const string BAD_STRING = "Invalid string passed, will not serialize to JSON or XML. Raw string should be JSON or XML syntax.";
+            const string BAD_COLL_ID = "Cannot open document collection with collection ID given: ";
 
             //other constants
-            const string EMPTY_DOC      = "{}";
+            const string EMPTY_DOC = "{}";
 
             try
             {
                 // if the document is empty, return bad request
-                if (newDoc.ToString().Replace(" ","") == EMPTY_DOC)
+                if (newDoc.ToString().Replace(" ", "") == EMPTY_DOC)
                 {
                     return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, DOC_NULL);
                 }
@@ -99,7 +183,7 @@ namespace Wellhub
                         }
                     }
                     // call create document method and return ID of created document
-                    Document created = await SetDocClient().CreateDocumentAsync(CollectionID, newDoc);
+                    Document created = await Client.CreateDocumentAsync(CollectionID, newDoc);
                     return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id);
                 }
             }
@@ -111,7 +195,7 @@ namespace Wellhub
             catch (Exception ex)
             {
                 string msg = "";
-                
+
                 //if document client is not null
                 if (client != null)
                 {
@@ -168,7 +252,7 @@ namespace Wellhub
         {
             try
             {
-                Document doc = SetDocClient().CreateDocumentQuery<Document>(CollectionID).Where(d => d.Id == docID).AsEnumerable().First();
+                Document doc = Client.CreateDocumentQuery<Document>(CollectionID).Where(d => d.Id == docID).AsEnumerable().First();
 
                 if (doc == null)
                 {
@@ -177,17 +261,16 @@ namespace Wellhub
                 }
                 else
                 {
-                    switch (returnType)
+                    if (returnType == ReturnType.XMLstring)
                     {
-                        case ReturnType.JSONstring:
-
-                             //return success as json
-                            return new WHResponse(WHResponse.ResponseCodes.SuccessGet, JsonConvert.SerializeObject(doc).ToString());
-
-                        case ReturnType.XMLstring:
-
-                            //return success as xml
-                            return new WHResponse(WHResponse.ResponseCodes.SuccessGet, JsonConvert.DeserializeXmlNode(doc.ToString()).ToString());
+                        //return success as xml
+                        //XmlDocument xDoc = (XmlDocument)JsonConvert.DeserializeXmlNode(doc.ToString(),"WHResponse");
+                        return new WHResponse(WHResponse.ResponseCodes.SuccessGet, JsonConvert.DeserializeXmlNode(doc.ToString(), "WHResponse").InnerXml) ;
+                    }
+                    else
+                    {
+                        //return success as json
+                        return new WHResponse(WHResponse.ResponseCodes.SuccessGet, JsonConvert.SerializeObject(doc));
                     }
                 }
             }
@@ -239,7 +322,7 @@ namespace Wellhub
             try
             {
                 // call create document method and return ID of created document
-                IEnumerable<Document> delDocs = SetDocClient().CreateDocumentQuery(CollectionID).Where(d => d.Id == docID).AsEnumerable();
+                IEnumerable<Document> delDocs = Client.CreateDocumentQuery(CollectionID).Where(d => d.Id == docID).AsEnumerable();
 
                 //if there are no docs with that ID
                 if (delDocs.Count() == 0)
@@ -251,7 +334,7 @@ namespace Wellhub
                 {
                     //get the self link of document and delete
                     string sLink = delDocs.First().SelfLink;
-                    ResourceResponse<Document> retDoc = await SetDocClient().DeleteDocumentAsync(sLink);
+                    ResourceResponse<Document> retDoc = await Client.DeleteDocumentAsync(sLink);
 
                     //return http status for delete success (no content)
                     return new WHResponse(WHResponse.ResponseCodes.SuccessDelete, null);
@@ -299,93 +382,11 @@ namespace Wellhub
                 return respList;
             }
         }
-
-        private static DocumentClient SetDocClient()
-        {
-            const string DOC_ERR_MSG = "The Document Client could not be created from stored credentials.  ";
-            const string END_PT_MSG = "The DocumentDB end point is not specified.  ";
-            const string AUTH_KEY_MSG = "The DocumentDB authorization key is not specified.  ";
-            const string AGG_ERR_MSG = " Errors Occurred. ";
-            const string STAT_TEXT = ", StatusCode: ";
-            const string ACT_TEXT = ", Activity id: ";
-            const string ERR_TYPE = "Error type: ";
-            const string MSG_TEXT = ", Message: ";
-            const string BASE_MSG_TEXT = ", BaseMessage: ";
-
-            // if there is no client already
-            if (client == null)
-            {
-                try
-                {
-                    // create an instance of DocumentClient from from settings in config file
-                    client = new DocumentClient(new Uri(ConfigurationManager.AppSettings[ENDPT]),
-                                ConfigurationManager.AppSettings[AUTHKEY]);
-                }
-                catch (DocumentClientException docEx)
-                {
-                    //if endpoint not specified throw an error 
-                    if (string.IsNullOrEmpty(ConfigurationManager.AppSettings[ENDPT]) )
-                    {
-                        throw new ApplicationException(END_PT_MSG);
-                    }
-                    
-                    //if authkey not specified throw an error 
-                    if (string.IsNullOrEmpty(ConfigurationManager.AppSettings[AUTHKEY]) )
-                    {
-                        throw new ApplicationException(AUTH_KEY_MSG);
-                    }
-                    
-                    // get base exception 
-                    Exception baseException = docEx.GetBaseException();
-
-                    // create application exception
-                    ApplicationException appEx = new ApplicationException(string.Concat(DOC_ERR_MSG, STAT_TEXT, docEx.StatusCode, 
-                        ACT_TEXT, docEx.ActivityId, MSG_TEXT, docEx.Message, BASE_MSG_TEXT, baseException.Message), baseException);
-                        
-                    //throw the error
-                    throw appEx;
-                }
-                catch (AggregateException aggEx)
-                {
-                    // create error message
-                    var msg = string.Concat(aggEx.InnerExceptions.Count, AGG_ERR_MSG);
-
-                    // for each exception
-                    foreach (var ex in aggEx.InnerExceptions)
-                    {
-                        // try casting as document client exception
-                        DocumentClientException docEx = ex as DocumentClientException;
-
-                        // if success
-                        if (docEx != null)
-                        {
-                            // append document client message
-                            msg = string.Concat(msg, "[", DOC_ERR_MSG, STAT_TEXT, docEx.StatusCode,
-                        ACT_TEXT, docEx.ActivityId, MSG_TEXT, docEx.Message, BASE_MSG_TEXT, ex.GetBaseException().Message, "]");
-                        }
-                        else
-                        {
-                            //append other message
-                            msg = string.Concat(msg, "[", ERR_TYPE, ex.GetType(), MSG_TEXT, docEx.Message, "]");
-                        }
-                    }
-
-                    //throw the error
-                    throw new ApplicationException(msg, aggEx);
-                }
-                catch (Exception ex)
-                {
-                    //throw the error
-                    throw new ApplicationException(string.Concat(ERR_TYPE, ex.GetType(), MSG_TEXT, ex.Message), ex);
-                }
-            }
-            return client;
-        }
     }
 
     public class WHResponse
     {
-        public enum ResponseCodes :int
+        public enum ResponseCodes : int
         {
             //response codes are same as for Microsoft DocumentDB public API
             SuccessGet = 200,           //HTTP ok
