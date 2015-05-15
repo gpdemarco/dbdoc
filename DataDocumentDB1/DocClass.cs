@@ -237,7 +237,7 @@ namespace Wellhub
                         case OpsType.AddDoc:
                             // call create document method and return ID of created document
                             Document created = await Client.CreateDocumentAsync(CollectionID, newDoc);
-                            return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, new Uri(created.SelfLink));
+                            return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, created.SelfLink);
                         //case OpsType.UpdateDoc:
                         //    break;
 
@@ -248,7 +248,7 @@ namespace Wellhub
                             //read = Client.
                             //// call create document method and return ID of created document
                             //created = await Client.ReplaceDocumentAsync(newDoc);
-                            //return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, new Uri(created.SelfLink));
+                            //return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, created.SelfLink);
                         default:
                             return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, BAD_STRING);
                     }
@@ -328,10 +328,8 @@ namespace Wellhub
                 Expression<Func<Document, bool>> lambdaExp = d => d.Id == docID;
                 IEnumerable<Document> docs = GetDocuments(lambdaExp);
 
-                //format a response object and add selfID as link
-                WHResponse resp = FormatQueryResults(docs, returnType);
-                resp.Link = new Uri(docs.First().SelfLink);
-                return resp;
+                //return formatted response object
+                return FormatQueryResults(docs, returnType);
             }
             catch (Exception ex)
             {
@@ -368,55 +366,16 @@ namespace Wellhub
                     //return success as formatted XML string
                     return new WHResponse(WHResponse.ResponseCodes.SuccessGet,
                         JsonConvert.DeserializeXmlNode(string.Concat(JSON_ROOT, JsonConvert.SerializeObject(docs).ToString(), "}}")).InnerXml,
-                        false, null, null, WHResponse.ContentType.XML);
+                        false, null, null, WHResponse.ContentType.XML, docs.First().SelfLink, null, null, docs.Count());
                 }
                 else
                 {
                     //return success as json
                     return new WHResponse(WHResponse.ResponseCodes.SuccessGet, JsonConvert.SerializeObject(docs),
-                        false, null, null, WHResponse.ContentType.JSON);
+                        false, null, null, WHResponse.ContentType.JSON, docs.First().SelfLink, null, null, docs.Count());
                 }
             }
         }
-        ///// <summary>
-        ///// Get documents using SQL string.  Returns JSON array of documents or XML document.
-        ///// </summary>
-        ///// <param name="sqlString">DocDB SQL string to select documents.</param>
-        ///// <param name="returnType">Enumerated return type, default is JSON.</param>
-        ///// <returns>WHResponse object</returns>
-        //public WHResponse GetDocs(string sqlString, ReturnType returnType = ReturnType.JSONstring)
-        //{
-        //    try
-        //    {
-        //        //get documents using sql string in parameter and return formatted response
-        //        return FormatQueryResults(GetDocuments(sqlString), returnType);
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        // return bad request
-        //        return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
-        //    }
-        //}
-        ///// <summary>
-        ///// Get documents using LINQ lambda expression.  Returns JSON array of documents or XML document.
-        ///// </summary>
-        ///// <param name="lambdaExp">LINQ lambda expression to select documents. Example: d => d.Id = "docid" where d is a Document.</param>
-        ///// <param name="returnType">Enumerated return type, default is JSON.</param>
-        ///// <returns>WHResponse object</returns>
-        //public WHResponse GetDocs(Expression<Func<Document,bool>> lambdaExp, ReturnType returnType = ReturnType.JSONstring)
-        //{
-        //    try
-        //    {
-        //        //get documents using lambda exp in parameter and return formatted response
-        //        return FormatQueryResults(GetDocuments(lambdaExp), returnType);
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        // return bad request
-        //        return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
-        //        throw;
-        //    }
-        //}
         private IQueryable<Document> GetDocuments(object queryExp, FeedOptions feedOpt = null)
         {
             try
@@ -473,7 +432,7 @@ namespace Wellhub
 
                 // convert to response format
                 WHResponse resObj = FormatQueryResults(feedResp, returnType);
-
+                
                 // store continuation token and return response object
                 resObj.Continuation = feedResp.ResponseContinuation;
                 return resObj;
@@ -627,9 +586,10 @@ namespace Wellhub
         public string ErrorMsg { get; set; }
         public Exception InnerException { get; set; }
         public ContentType MediaType { get; set; }
-        public Uri Link { get; set; }
-        public Uri AttachmentLink { get; set; }
+        public string Link { get; set; }
+        public string AttachmentLink { get; set; }
         public string Continuation { get; set; }
+        public int Count { get; set; }
 
         /// <summary>
         /// Creates a blank Wellhub Response data transfer object.
@@ -644,12 +604,13 @@ namespace Wellhub
         /// <param name="hasErr">Indicates if processing encountered an error.</param>
         /// <param name="errMsg">Error message of processing exception.</param>
         /// <param name="innerEx">Inner exception object - wraps a processing exception.</param>
-        /// <param name="contentType">Internet media type of the Return body.  Default is J</param>
-        /// <param name="link">URI containing link to get associated document if there is one.</param>
-        /// <param name="attLink">URI containing link to get attachment(s) of associated document if there is one.</param>
+        /// <param name="contentType">Internet media type of the Return body.  Default is JSON.</param>
+        /// <param name="link">String containing internal link to get associated document if there is one.</param>
+        /// <param name="attLink">String containing internal link to get attachment(s) of associated document if there is one.</param>
         /// <param name="respCont">String containing response continuation key for paging operations (used to get next page).</param>
+        /// <param name="docCount">Integer showing how many documents are in Return.</param>
         public WHResponse(ResponseCodes status, string body, bool hasErr = false, string errMsg = null, Exception innerEx = null, 
-            ContentType contentType = ContentType.Text, Uri link = null, Uri attLink = null, string respCont = null)
+            ContentType contentType = ContentType.Text, string link = null, string attLink = null, string respCont = null, int docCount = 0)
         {
             //return a response object from parms
             HTTPStatus = status;
@@ -661,6 +622,7 @@ namespace Wellhub
             Link = link;
             AttachmentLink = attLink;
             Continuation = respCont;
+            Count = docCount;
         }
 
         private string Content(ContentType intContent)
