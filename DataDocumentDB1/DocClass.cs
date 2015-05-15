@@ -31,6 +31,9 @@ namespace Wellhub
         //root node added to json to convert to well-formed XML with namespace
         const string JSON_ROOT = "{'?xml': {'@version': '1.0','@standalone': 'no'}, 'whResponse' : { '@xmlns' : 'http://well-hub.com', 'whDocument' :";
 
+        //message constants
+        const string BAD_QUERY = "The query could not be executed as written. ";
+
         //variables used throughout program 
         private static string collID;                       //default collection ID if one is not passed
         private static DocumentClient client;               //document client - created once per instance for performance
@@ -60,7 +63,14 @@ namespace Wellhub
                     {
                         // create an instance of DocumentClient from from settings in config file
                         client = new DocumentClient(new Uri(ConfigurationManager.AppSettings[ENDPT]),
-                                    ConfigurationManager.AppSettings[AUTHKEY]);
+                                    ConfigurationManager.AppSettings[AUTHKEY],
+                                    new ConnectionPolicy
+                                    {
+                                        ConnectionMode = ConnectionMode.Direct,
+                                        ConnectionProtocol = Protocol.Tcp
+                                    });
+                        //explicitly open for performance improvement
+                        client.OpenAsync();
                     }
                     catch (DocumentClientException docEx)
                     {
@@ -144,6 +154,13 @@ namespace Wellhub
             collID = collSelfId;
         }
 
+        private enum OpsType : int
+        {
+            AddDoc = 0,
+            UpdateDoc = 1,
+            ReplaceDoc = 2
+        }
+
         /// <summary>
         /// Adds a document to the database and returns ID of new document.
         /// </summary>
@@ -151,6 +168,18 @@ namespace Wellhub
         /// a POCO (plain old CLR object), or just a string that converts to JSON</param>
         /// <returns>String containing the ID of the document that was added. </returns>
         public async Task<WHResponse> AddDocAsync(object newDoc)
+        {
+            return await DocOpsAsync(newDoc, OpsType.AddDoc);
+        }
+
+         /// <summary>
+        /// Perform document operation (add, update or replace) on the database.
+        /// </summary>
+        /// <param name="newDoc">The document to be created. Can be anything that evaluates to JSON: a JSON document or string, XML document or string, 
+        /// a POCO (plain old CLR object), or just a string that converts to JSON</param>
+        /// <param name="operation">The enumerated operation to perform (add, update, replace).</param>
+        /// <returns>String containing the ID of the document that was added. </returns>
+       private async Task<WHResponse> DocOpsAsync(object newDoc, OpsType operation)
         {
             //WHResponse messages
             const string DOC_NULL = "The document to be added is empty.  ";
@@ -203,9 +232,26 @@ namespace Wellhub
                             }
                         }
                     }
-                    // call create document method and return ID of created document
-                    Document created = await Client.CreateDocumentAsync(CollectionID, newDoc);
-                    return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, new Uri(created.SelfLink));
+                    switch (operation)
+                    {
+                        case OpsType.AddDoc:
+                            // call create document method and return ID of created document
+                            Document created = await Client.CreateDocumentAsync(CollectionID, newDoc);
+                            return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, new Uri(created.SelfLink));
+                        //case OpsType.UpdateDoc:
+                        //    break;
+
+                        //case OpsType.ReplaceDoc:
+                        //    break;
+                            //Document replDoc = new Document();
+                            //replDoc.LoadFrom()
+                            //read = Client.
+                            //// call create document method and return ID of created document
+                            //created = await Client.ReplaceDocumentAsync(newDoc);
+                            //return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, new Uri(created.SelfLink));
+                        default:
+                            return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, BAD_STRING);
+                    }
                 }
             }
             catch (ApplicationException appEx)
@@ -273,30 +319,6 @@ namespace Wellhub
         /// </summary>
         /// <param name="docID">ID of the document to return.</param>
         /// <param name="returnType">Enumerated return type, default is JSON.</param>
-        /// <returns></returns>
-        //public WHResponse GetDocByID(string docID, ReturnType returnType = ReturnType.JSONstring)
-        //{
-        //    try
-        //    {
-        //        //get document with matching ID and create a collection
-        //        Document doc = Client.CreateDocumentQuery<Document>(CollectionID).Where(d => d.Id == docID).AsEnumerable().First();
-        //        List<Document> docs = new List<Document>();
-        //        docs.Add(doc);
-
-        //        //return formatted response
-        //        return FormatQueryResults(docs, returnType);
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        // return bad request
-        //        return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
-        //    }
-        //}
-        /// <summary>
-        /// Get single document using document ID.  Returns JSON array of documents or XML document.
-        /// </summary>
-        /// <param name="docID">ID of the document to return.</param>
-        /// <param name="returnType">Enumerated return type, default is JSON.</param>
         /// <returns>WHResponse object</returns>
         public WHResponse GetDocByID(string docID, ReturnType returnType = ReturnType.JSONstring)
         {
@@ -356,47 +378,46 @@ namespace Wellhub
                 }
             }
         }
-        /// <summary>
-        /// Get documents using SQL string.  Returns JSON array of documents or XML document.
-        /// </summary>
-        /// <param name="sqlString">DocDB SQL string to select documents.</param>
-        /// <param name="returnType">Enumerated return type, default is JSON.</param>
-        /// <returns>WHResponse object</returns>
-        public WHResponse GetDocs(string sqlString, ReturnType returnType = ReturnType.JSONstring)
-        {
-            try
-            {
-                //get documents using sql string in parameter and return formatted response
-                return FormatQueryResults(GetDocuments(sqlString), returnType);
-            }
-            catch (Exception ex)
-            {
-                // return bad request
-                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
-            }
-        }
-        /// <summary>
-        /// Get documents using LINQ lambda expression.  Returns JSON array of documents or XML document.
-        /// </summary>
-        /// <param name="lambdaExp">LINQ lambda expression to select documents. Example: d => d.Id = "docid" where d is a Document.</param>
-        /// <param name="returnType">Enumerated return type, default is JSON.</param>
-        /// <returns>WHResponse object</returns>
-        public WHResponse GetDocs(Expression<Func<Document,bool>> lambdaExp, ReturnType returnType = ReturnType.JSONstring)
-        {
-            try
-            {
-                //get documents using lambda exp in parameter and return formatted response
-                return FormatQueryResults(GetDocuments(lambdaExp), returnType);
-            }
-            catch (Exception ex)
-            {
-                // return bad request
-                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
-                throw;
-            }
-        }
-        
-        private IQueryable<Document> GetDocuments(object queryExp)
+        ///// <summary>
+        ///// Get documents using SQL string.  Returns JSON array of documents or XML document.
+        ///// </summary>
+        ///// <param name="sqlString">DocDB SQL string to select documents.</param>
+        ///// <param name="returnType">Enumerated return type, default is JSON.</param>
+        ///// <returns>WHResponse object</returns>
+        //public WHResponse GetDocs(string sqlString, ReturnType returnType = ReturnType.JSONstring)
+        //{
+        //    try
+        //    {
+        //        //get documents using sql string in parameter and return formatted response
+        //        return FormatQueryResults(GetDocuments(sqlString), returnType);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        // return bad request
+        //        return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
+        //    }
+        //}
+        ///// <summary>
+        ///// Get documents using LINQ lambda expression.  Returns JSON array of documents or XML document.
+        ///// </summary>
+        ///// <param name="lambdaExp">LINQ lambda expression to select documents. Example: d => d.Id = "docid" where d is a Document.</param>
+        ///// <param name="returnType">Enumerated return type, default is JSON.</param>
+        ///// <returns>WHResponse object</returns>
+        //public WHResponse GetDocs(Expression<Func<Document,bool>> lambdaExp, ReturnType returnType = ReturnType.JSONstring)
+        //{
+        //    try
+        //    {
+        //        //get documents using lambda exp in parameter and return formatted response
+        //        return FormatQueryResults(GetDocuments(lambdaExp), returnType);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        // return bad request
+        //        return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
+        //        throw;
+        //    }
+        //}
+        private IQueryable<Document> GetDocuments(object queryExp, FeedOptions feedOpt = null)
         {
             try
             {
@@ -404,7 +425,7 @@ namespace Wellhub
                 if (queryExp is string)
                 {
                     string sqlString = queryExp as string;
-                    return Client.CreateDocumentQuery<Document>(CollectionID, sqlString);
+                    return Client.CreateDocumentQuery<Document>(CollectionID, sqlString, feedOpt);
                 }
                 else
                 {
@@ -412,7 +433,7 @@ namespace Wellhub
                     if (queryExp is Expression<Func<Document, bool>>)
                     {
                         Expression<Func<Document, bool>> lambdaExp = queryExp as Expression<Func<Document, bool>>;
-                        return Client.CreateDocumentQuery<Document>(CollectionID).Where(lambdaExp);
+                        return Client.CreateDocumentQuery<Document>(CollectionID, feedOpt).Where(lambdaExp);
                     }
                 }
                 // return empty set if not sql or lambda
@@ -424,11 +445,53 @@ namespace Wellhub
             }
         }
 
-            ////get documents by document type
+        /// <summary>
+        /// Get documents using SQL string.  Returns JSON array of documents or XML document.
+        /// </summary>
+        /// <param name="queryExp">DocDB SQL string or lambda expression to select documents. Sample lambda declaration: Expression(Func(Document, bool)) lambdaExp = d => d.Id == docID </param>
+        /// <param name="returnType">Enumerated return type, default is JSON.</param>
+        /// <param name="maxCount">Maximum number of documents to return.</param>
+        /// <param name="sessionToken">Session token for consistency if required.</param>
+        /// <param name="contToken">Continuation token for paging.  Taken from previous WHResponse.Continuation property.</param>
+        /// <returns>WHResponse object</returns>
+        public async Task<WHResponse> GetDocsAsync(object queryExp, ReturnType returnType = ReturnType.JSONstring, int maxCount = 100, string sessionToken = null, string contToken = null)
+        {
+            //set the feed options
+            FeedOptions feedOpt = new FeedOptions
+            {
+                MaxItemCount = maxCount,
+                SessionToken = sessionToken,
+                RequestContinuation = contToken
+            };
+            try
+            {
+                // set up to receive queryable document collection based upon query expression
+                IDocumentQuery<Document> queryable = GetDocuments(queryExp, feedOpt) as IDocumentQuery<Document>;
+
+                //execute query and get results as a feed
+                FeedResponse<Document> feedResp = await queryable.ExecuteNextAsync<Document>();
+
+                // convert to response format
+                WHResponse resObj = FormatQueryResults(feedResp, returnType);
+
+                // store continuation token and return response object
+                resObj.Continuation = feedResp.ResponseContinuation;
+                return resObj;
+            }
+            catch (Exception ex)
+            {
+                // return bad request
+                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, string.Concat(BAD_QUERY, ex.Message), ex);
+            }
+        }
+        ////get documents by document type
         //public DbDocumentCollection GetDocsByType(int limit = 0, int offset = 0);
 
         ////replace documents
-        //public void ReplaceDoc(DbDocument newDoc);
+        public async Task<WHResponse> ReplaceDocAsync(object newDoc)
+        {
+            return await DocOpsAsync(newDoc, OpsType.ReplaceDoc);
+        }
         //public void ReplaceBatchAsync(DbDocumentCollection newDocBatch);
 
         ////update documents
@@ -449,27 +512,38 @@ namespace Wellhub
         /// </summary>
         /// <param name="docID">The ID of the document to be deleted. If not found, returns HTTP status code 404.</param>
         /// <returns>Integer containing HTTP status code: 204=success; 404=not found; </returns>
-        public async Task<WHResponse> DeleteDocAsync(string docID)
+        public async Task<WHResponse> DeleteDocAsync(string docID = "")
         {
+            const string EMPTY_ID = "The request did not specify a document ID. ";
+
             try
             {
-                // call create document method and return ID of created document
-                IEnumerable<Document> delDocs = Client.CreateDocumentQuery(CollectionID).Where(d => d.Id == docID).AsEnumerable();
-
-                //if there are no docs with that ID
-                if (delDocs.Count() == 0)
+                //if there is a document ID
+                if (docID != "") 
                 {
-                    // return http status for not found
-                    return new WHResponse(WHResponse.ResponseCodes.NotFound, null);
+                    // call create document method and return ID of created document
+                    IEnumerable<Document> delDocs = Client.CreateDocumentQuery(CollectionID).Where(d => d.Id == docID).AsEnumerable();
+
+                    //if there are no docs with that ID
+                    if (delDocs.Count() == 0)
+                    {
+                        // return http status for not found
+                        return new WHResponse(WHResponse.ResponseCodes.NotFound, null);
+                    }
+                    else
+                    {
+                        //get the self link of document and delete
+                        string sLink = delDocs.First().SelfLink;
+                        ResourceResponse<Document> retDoc = await Client.DeleteDocumentAsync(sLink);
+
+                        //return http status for delete success (no content)
+                        return new WHResponse(WHResponse.ResponseCodes.SuccessDelete, null);
+                    }
                 }
                 else
                 {
-                    //get the self link of document and delete
-                    string sLink = delDocs.First().SelfLink;
-                    ResourceResponse<Document> retDoc = await Client.DeleteDocumentAsync(sLink);
-
-                    //return http status for delete success (no content)
-                    return new WHResponse(WHResponse.ResponseCodes.SuccessDelete, null);
+                    // return invalid client
+                    return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, EMPTY_ID);
                 }
             }
             catch (Exception ex)
@@ -555,6 +629,7 @@ namespace Wellhub
         public ContentType MediaType { get; set; }
         public Uri Link { get; set; }
         public Uri AttachmentLink { get; set; }
+        public string Continuation { get; set; }
 
         /// <summary>
         /// Creates a blank Wellhub Response data transfer object.
@@ -572,8 +647,9 @@ namespace Wellhub
         /// <param name="contentType">Internet media type of the Return body.  Default is J</param>
         /// <param name="link">URI containing link to get associated document if there is one.</param>
         /// <param name="attLink">URI containing link to get attachment(s) of associated document if there is one.</param>
+        /// <param name="respCont">String containing response continuation key for paging operations (used to get next page).</param>
         public WHResponse(ResponseCodes status, string body, bool hasErr = false, string errMsg = null, Exception innerEx = null, 
-            ContentType contentType = ContentType.Text, Uri link = null, Uri attLink = null)
+            ContentType contentType = ContentType.Text, Uri link = null, Uri attLink = null, string respCont = null)
         {
             //return a response object from parms
             HTTPStatus = status;
@@ -584,6 +660,7 @@ namespace Wellhub
             MediaType = contentType;
             Link = link;
             AttachmentLink = attLink;
+            Continuation = respCont;
         }
 
         private string Content(ContentType intContent)
