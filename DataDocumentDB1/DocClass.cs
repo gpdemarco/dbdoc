@@ -22,21 +22,39 @@ namespace Wellhub
     /// </summary>
     public class DocHandler
     {
+        #region Constants and Variables
         const string ENDPT = "serviceEndpoint";             // Azure service endpoint for DocumentDB - used to read app.config variable
         const string AUTHKEY = "authKey";                   // Azure authorization key for DocumentDB - used to read app.config variable
         const string COLL_SELFID = "collectionSelfID";      // collection in DocumentDB - used to read app.config variable
-                                                            //const string DBNAME = "database";                   // database in DocumentDB - used to read app.config variable
-                                                            //const string COLLNAME = "collection";               // collection in DocumentDB - used to read app.config variable
 
         //root node added to json to convert to well-formed XML with namespace
         const string JSON_ROOT = "{'?xml': {'@version': '1.0','@standalone': 'no'}, 'whResponse' : { '@xmlns' : 'http://well-hub.com', 'whDocument' :";
 
-        //message constants
+        //WHResponse messages
         const string BAD_QUERY = "The query could not be executed as written. ";
+        const string DOC_NULL = "The document to be added is empty.  ";
+        const string BAD_STRING = "Invalid string passed, will not serialize to JSON or XML. Raw string should be JSON or XML syntax.";
+        const string BAD_COLL_ID = "Cannot open document collection with collection ID given: ";
+        const string EMPTY_ID = "The request did not specify a document ID. ";
+
+        const string DOC_ERR_MSG = "The Document Client could not be created from stored credentials.  ";
+        const string END_PT_MSG = "The DocumentDB end point is not specified.  ";
+        const string AUTH_KEY_MSG = "The DocumentDB authorization key is not specified.  ";
+        const string AGG_ERR_MSG = " Errors Occurred. ";
+        const string STAT_TEXT = ", StatusCode: ";
+        const string ACT_TEXT = ", Activity id: ";
+        const string ERR_TYPE = "Error type: ";
+        const string MSG_TEXT = ", Message: ";
+        const string BASE_MSG_TEXT = ", BaseMessage: ";
+
+        //other constants
+        const string EMPTY_DOC = "{}";
 
         //variables used throughout program 
         private static string collID;                       //default collection ID if one is not passed
         private static DocumentClient client;               //document client - created once per instance for performance
+
+        #endregion
 
         /// <summary>
         /// Returns the collection ID
@@ -49,16 +67,6 @@ namespace Wellhub
             {
                 if (client == null)
                 {
-                    const string DOC_ERR_MSG = "The Document Client could not be created from stored credentials.  ";
-                    const string END_PT_MSG = "The DocumentDB end point is not specified.  ";
-                    const string AUTH_KEY_MSG = "The DocumentDB authorization key is not specified.  ";
-                    const string AGG_ERR_MSG = " Errors Occurred. ";
-                    const string STAT_TEXT = ", StatusCode: ";
-                    const string ACT_TEXT = ", Activity id: ";
-                    const string ERR_TYPE = "Error type: ";
-                    const string MSG_TEXT = ", Message: ";
-                    const string BASE_MSG_TEXT = ", BaseMessage: ";
-
                     try
                     {
                         // create an instance of DocumentClient from from settings in config file
@@ -181,14 +189,6 @@ namespace Wellhub
         /// <returns>String containing the ID of the document that was added. </returns>
        private async Task<WHResponse> DocOpsAsync(object newDoc, OpsType operation)
         {
-            //WHResponse messages
-            const string DOC_NULL = "The document to be added is empty.  ";
-            const string BAD_STRING = "Invalid string passed, will not serialize to JSON or XML. Raw string should be JSON or XML syntax.";
-            const string BAD_COLL_ID = "Cannot open document collection with collection ID given: ";
-
-            //other constants
-            const string EMPTY_DOC = "{}";
-
             try
             {
                 // if the document is empty, return bad request
@@ -398,9 +398,9 @@ namespace Wellhub
                 // return empty set if not sql or lambda
                 return null;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                throw ex;
+                throw;
             }
         }
 
@@ -473,7 +473,6 @@ namespace Wellhub
         /// <returns>Integer containing HTTP status code: 204=success; 404=not found; </returns>
         public async Task<WHResponse> DeleteDocAsync(string docID = "")
         {
-            const string EMPTY_ID = "The request did not specify a document ID. ";
 
             try
             {
