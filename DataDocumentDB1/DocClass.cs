@@ -37,6 +37,7 @@ namespace Wellhub
         const string BAD_COLL_ID = "Cannot open document collection with collection ID given: ";
         const string EMPTY_ID = "The request did not specify a document ID. ";
 
+        //Other constants
         const string DOC_ERR_MSG = "The Document Client could not be created from stored credentials.  ";
         const string END_PT_MSG = "The DocumentDB end point is not specified.  ";
         const string AUTH_KEY_MSG = "The DocumentDB authorization key is not specified.  ";
@@ -46,6 +47,11 @@ namespace Wellhub
         const string ERR_TYPE = "Error type: ";
         const string MSG_TEXT = ", Message: ";
         const string BASE_MSG_TEXT = ", BaseMessage: ";
+        const string CONFLICT_TEXT_REPL = "specified id or name already exists";
+        const string CONFLICT_TEXT_ADD = "already taken";
+        const string CONFLICT_MSG = "There is already a document in the database with this ID but a different SelfID.  ";
+        const string NOTFOUND_TEXT = "is invalid";
+        const string NOTFOUND_MSG = "There is no document with the specified SelfID.  ";
 
         //other constants
         const string EMPTY_DOC = "{}";
@@ -56,6 +62,7 @@ namespace Wellhub
 
         #endregion
 
+        #region Constructor and Properties        
         /// <summary>
         /// Returns the collection ID
         /// </summary>
@@ -161,7 +168,12 @@ namespace Wellhub
             // if collection ID is passed, set the property
             collID = collSelfId;
         }
+        #endregion
 
+        #region Enumerations
+        /// <summary>
+        /// Return types from DocOpsAsync, internal method to determine input type and interact with database
+        /// </summary>
         private enum OpsType : int
         {
             AddDoc = 0,
@@ -169,6 +181,18 @@ namespace Wellhub
             ReplaceDoc = 2
         }
 
+        /// <summary>
+        /// Return types for WHResponse objects
+        /// </summary>
+        public enum ReturnType : int
+        {
+            JSONstring = 1,
+            XMLstring = 2
+        }
+        #endregion
+
+        #region Public Methods
+        #region Add Methods
         /// <summary>
         /// Adds a document to the database and returns ID of new document.
         /// </summary>
@@ -178,104 +202,6 @@ namespace Wellhub
         public async Task<WHResponse> AddDocAsync(object newDoc)
         {
             return await DocOpsAsync(newDoc, OpsType.AddDoc);
-        }
-
-         /// <summary>
-        /// Perform document operation (add, update or replace) on the database.
-        /// </summary>
-        /// <param name="newDoc">The document to be created. Can be anything that evaluates to JSON: a JSON document or string, XML document or string, 
-        /// a POCO (plain old CLR object), or just a string that converts to JSON</param>
-        /// <param name="operation">The enumerated operation to perform (add, update, replace).</param>
-        /// <returns>String containing the ID of the document that was added. </returns>
-       private async Task<WHResponse> DocOpsAsync(object newDoc, OpsType operation)
-        {
-            try
-            {
-                // if the document is empty, return bad request
-                if (newDoc.ToString().Replace(" ", "") == EMPTY_DOC)
-                {
-                    return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, DOC_NULL);
-                }
-                else
-                {
-                    // if the parameter passed was a string and not a formal object
-                    if (newDoc is string)
-                    {
-                        try
-                        {
-                            //try converting to JSON object and reassigning
-                            JObject jStr = JObject.Parse(newDoc.ToString());
-                            newDoc = jStr;
-                        }
-                        catch (Exception jEx)
-                        {
-                            //if string is not XML
-                            string testStr = newDoc as string;
-                            if (testStr.First() != Convert.ToChar("<"))
-                            {
-                                // return invalid string
-                                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, BAD_STRING, jEx);
-                            }
-                            else
-                            {
-                                try
-                                {
-                                    XmlDocument docXML = new XmlDocument();
-                                    docXML.InnerXml = newDoc.ToString();
-                                    newDoc = docXML;
-                                }
-                                catch (Exception xEx)
-                                {
-                                    // return invalid string
-                                    return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, BAD_STRING, xEx);
-                                }
-                            }
-                        }
-                    }
-                    switch (operation)
-                    {
-                        case OpsType.AddDoc:
-                            // call create document method and return ID of created document
-                            Document created = await Client.CreateDocumentAsync(CollectionID, newDoc);
-                            return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, created.SelfLink);
-                        //case OpsType.UpdateDoc:
-                        //    break;
-
-                        //case OpsType.ReplaceDoc:
-                        //    break;
-                            //Document replDoc = new Document();
-                            //replDoc.LoadFrom()
-                            //read = Client.
-                            //// call create document method and return ID of created document
-                            //created = await Client.ReplaceDocumentAsync(newDoc);
-                            //return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, created.SelfLink);
-                        default:
-                            return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, BAD_STRING);
-                    }
-                }
-            }
-            catch (ApplicationException appEx)
-            {
-                // return invalid client
-                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, appEx.Message, appEx);
-            }
-            catch (Exception ex)
-            {
-                string msg = "";
-
-                //if document client is not null
-                if (client != null)
-                {
-                    //check to see if collection id is valid
-                    ResourceResponse<DocumentCollection> docCol = await client.ReadDocumentCollectionAsync(CollectionID);
-                    if (docCol == null)
-                    {
-                        msg = string.Concat(BAD_COLL_ID, CollectionID, ". ");
-                    }
-                }
-                // create message - invalid client - and throw exception
-                throw new ApplicationException(string.Concat(msg, ex.Message), ex);
-            }
         }
 
         /// <summary>
@@ -313,97 +239,9 @@ namespace Wellhub
                 return respList;
             }
         }
+        #endregion
 
-        /// <summary>
-        /// Get single document using document ID.  Returns JSON array of documents or XML document.
-        /// </summary>
-        /// <param name="docID">ID of the document to return.</param>
-        /// <param name="returnType">Enumerated return type, default is JSON.</param>
-        /// <returns>WHResponse object</returns>
-        public WHResponse GetDocByID(string docID, ReturnType returnType = ReturnType.JSONstring)
-        {
-            try
-            {
-                //get document with matching ID 
-                Expression<Func<Document, bool>> lambdaExp = d => d.Id == docID;
-                IEnumerable<Document> docs = GetDocuments(lambdaExp);
-
-                //return formatted response object
-                return FormatQueryResults(docs, returnType);
-            }
-            catch (Exception ex)
-            {
-                // return bad request
-                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
-            }
-        }
-        /// <summary>
-        /// Return types for WHResponse objects
-        /// </summary>
-        public enum ReturnType : int
-        {
-            JSONstring = 1,
-            XMLstring = 2
-        }
-        /// <summary>
-        /// Formats a WHResponse object from the results of a query.
-        /// </summary>
-        /// <param name="docs">Collection of one or more Documents to format</param>
-        /// <param name="returnType">Format of Return property.</param>
-        /// <returns></returns>
-        private WHResponse FormatQueryResults(IEnumerable<Document> docs, ReturnType returnType)
-        {
-            //if no document exists
-            if (docs == null)
-            {
-                //return not found
-                return new WHResponse(WHResponse.ResponseCodes.NotFound, null);
-            }
-            else
-            {
-                if (returnType == ReturnType.XMLstring)
-                {
-                    //return success as formatted XML string
-                    return new WHResponse(WHResponse.ResponseCodes.SuccessGet,
-                        JsonConvert.DeserializeXmlNode(string.Concat(JSON_ROOT, JsonConvert.SerializeObject(docs).ToString(), "}}")).InnerXml,
-                        false, null, null, WHResponse.ContentType.XML, docs.First().SelfLink, null, null, docs.Count());
-                }
-                else
-                {
-                    //return success as json
-                    return new WHResponse(WHResponse.ResponseCodes.SuccessGet, JsonConvert.SerializeObject(docs),
-                        false, null, null, WHResponse.ContentType.JSON, docs.First().SelfLink, null, null, docs.Count());
-                }
-            }
-        }
-        private IQueryable<Document> GetDocuments(object queryExp, FeedOptions feedOpt = null)
-        {
-            try
-            {
-                //if query is string, execute and return
-                if (queryExp is string)
-                {
-                    string sqlString = queryExp as string;
-                    return Client.CreateDocumentQuery<Document>(CollectionID, sqlString, feedOpt);
-                }
-                else
-                {
-                    //if query is lambda expression, execute and return
-                    if (queryExp is Expression<Func<Document, bool>>)
-                    {
-                        Expression<Func<Document, bool>> lambdaExp = queryExp as Expression<Func<Document, bool>>;
-                        return Client.CreateDocumentQuery<Document>(CollectionID, feedOpt).Where(lambdaExp);
-                    }
-                }
-                // return empty set if not sql or lambda
-                return null;
-            }
-            catch (Exception)
-            {
-                throw;
-            }
-        }
-
+        #region Read Methods
         /// <summary>
         /// Get documents using SQL string.  Returns JSON array of documents or XML document.
         /// </summary>
@@ -443,16 +281,61 @@ namespace Wellhub
                 return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, string.Concat(BAD_QUERY, ex.Message), ex);
             }
         }
+        
+        /// <summary>
+        /// Get single document using document ID.  Returns JSON array of documents or XML document.
+        /// </summary>
+        /// <param name="docID">ID of the document to return.</param>
+        /// <param name="returnType">Enumerated return type, default is JSON.</param>
+        /// <returns>WHResponse object</returns>
+        public WHResponse GetDocByID(string docID, ReturnType returnType = ReturnType.JSONstring)
+        {
+            try
+            {
+                //get document with matching ID 
+                Expression<Func<Document, bool>> lambdaExp = d => d.Id == docID;
+                IEnumerable<Document> docs = GetDocuments(lambdaExp);
+
+                //return formatted response object
+                return FormatQueryResults(docs, returnType);
+            }
+            catch (Exception ex)
+            {
+                // return bad request
+                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
+            }
+        }
+
         ////get documents by document type
         //public DbDocumentCollection GetDocsByType(int limit = 0, int offset = 0);
+        #endregion
 
-        ////replace documents
-        public async Task<WHResponse> ReplaceDocAsync(object newDoc)
+        #region Replace Methods
+        /// <summary>
+        /// Replace a document in the database with a new document
+        /// </summary>
+        /// <param name="newDoc">The document to be created. Can be anything that evaluates to JSON: a JSON document or string, XML document or string, 
+        /// a POCO (plain old CLR object), or just a string that converts to JSON.</param>
+        /// <param name="selfID">The selfID of the document to be replaced. </param> 
+        /// <returns></returns>
+        public async Task<WHResponse> ReplaceDocAsync(object newDoc, string selfID)
         {
-            return await DocOpsAsync(newDoc, OpsType.ReplaceDoc);
+            try
+            {
+                //replace document
+                return await DocOpsAsync(newDoc, OpsType.ReplaceDoc, selfID);
+            }
+            catch (Exception ex)
+            {
+                // return bad request
+                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
+            }
         }
-        //public void ReplaceBatchAsync(DbDocumentCollection newDocBatch);
 
+        //public void ReplaceBatchAsync(DbDocumentCollection newDocBatch);
+        #endregion
+
+        #region Update Methods
         ////update documents
         //public void UpdateDoc(DbDocument newDoc);
         //public void UpdateDoc(IEnumerable<JObject> docJSON);
@@ -464,8 +347,9 @@ namespace Wellhub
         //public Task<List<string>> UpdateBatchAsync(IEnumerable<JObject> docJSONBatch);
         //public Task<List<string>> UpdateBatchAsync(XmlDocument docXMLBatch);
         //public Task<List<string>> UpdateBatchAsync(string[] updateArray);
+        #endregion
 
-        ////delete documents
+        #region Delete Methods
         /// <summary>
         /// Deletes a document from the database and returns HTTP status code of operation (204=success, 404=not found).
         /// </summary>
@@ -546,25 +430,220 @@ namespace Wellhub
                 return respList;
             }
         }
+        #endregion
+        #endregion
+
+        #region Private Internal Use Methods
+        /// <summary>
+        /// Perform document operation (add, update or replace) on the database.
+        /// </summary>
+        /// <param name="newDoc">The document to be created. Can be anything that evaluates to JSON: a JSON document or string, XML document or string, 
+        /// a POCO (plain old CLR object), or just a string that converts to JSON</param>
+        /// <param name="operation">The enumerated operation to perform (add, update, replace).</param>
+        /// <param name="selfID">The selfID of the document to replace (replace operation only).</param>
+        /// <returns>String containing the ID of the document that was added. </returns>
+        private async Task<WHResponse> DocOpsAsync(object newDoc, OpsType operation, string selfID = null)
+        {
+            try
+            {
+                // if the document is empty, return bad request
+                if (newDoc.ToString().Replace(" ", "") == EMPTY_DOC)
+                {
+                    return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, DOC_NULL);
+                }
+                else
+                {
+                    // if the parameter passed was a string and not a formal object
+                    if (newDoc is string)
+                    {
+                        try
+                        {
+                            //try converting to JSON object and reassigning
+                            JObject jStr = JObject.Parse(newDoc.ToString());
+                            newDoc = jStr;
+                        }
+                        catch (Exception jEx)
+                        {
+                            //if string is not XML
+                            string testStr = newDoc as string;
+                            if (testStr.First() != Convert.ToChar("<"))
+                            {
+                                // return invalid string
+                                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, BAD_STRING, jEx);
+                            }
+                            else
+                            {
+                                try
+                                {
+                                    XmlDocument docXML = new XmlDocument();
+                                    docXML.InnerXml = newDoc.ToString();
+                                    newDoc = docXML;
+                                }
+                                catch (Exception xEx)
+                                {
+                                    // return invalid string
+                                    return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, BAD_STRING, xEx);
+                                }
+                            }
+                        }
+                    }
+                    try
+                    {
+                        switch (operation)
+                        {
+                            case OpsType.AddDoc:
+
+                                // call create document method and return ID of created document
+                                Document created = await Client.CreateDocumentAsync(CollectionID, newDoc);
+                                return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, created.SelfLink);
+                        
+                            //case OpsType.UpdateDoc:
+                            //    break;
+
+                            case OpsType.ReplaceDoc:
+
+                                // call create document method and return ID of created document
+                                created = await Client.ReplaceDocumentAsync(selfID, newDoc);
+                                return new WHResponse(WHResponse.ResponseCodes.SuccessGetOrUpdate, created.Id, false, null, null, WHResponse.ContentType.Text, created.SelfLink);
+
+                            default:
+                                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, BAD_STRING);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // if there is a conflict, return error message
+                        if (ex.Message.ToString().Contains(CONFLICT_TEXT_REPL) | ex.Message.ToString().Contains(CONFLICT_TEXT_ADD))
+                        {
+                            return new WHResponse(WHResponse.ResponseCodes.Conflict, newDoc.ToString(), true, string.Concat(CONFLICT_MSG, ex.Message), ex, WHResponse.ContentType.Text);
+                        }
+                        // if document not found, return error message
+                        if (ex.Message.ToString().Contains(NOTFOUND_TEXT))
+                        {
+                            return new WHResponse(WHResponse.ResponseCodes.NotFound, newDoc.ToString(), true, string.Concat(NOTFOUND_MSG, ex.Message), ex, WHResponse.ContentType.Text);
+                        }
+                        //throw any other exceptions
+                        throw;
+                    }
+                }
+            }
+            catch (ApplicationException appEx)
+            {
+                // return invalid client
+                return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, appEx.Message, appEx);
+            }
+            catch (Exception ex)
+            {
+                string msg = "";
+
+                //if document client is not null
+                if (client != null)
+                {
+                    //check to see if collection id is valid
+                    ResourceResponse<DocumentCollection> docCol = await client.ReadDocumentCollectionAsync(CollectionID);
+                    if (docCol == null)
+                    {
+                        msg = string.Concat(BAD_COLL_ID, CollectionID, ". ");
+                    }
+                }
+                // create message - invalid client - and throw exception
+                throw new ApplicationException(string.Concat(msg, ex.Message), ex);
+            }
+        }
+
+        /// <summary>
+        /// Formats a WHResponse object from the results of a query.
+        /// </summary>
+        /// <param name="docs">Collection of one or more Documents to format</param>
+        /// <param name="returnType">Format of Return property.</param>
+        /// <param name="responseCode">Response Code to put in HTTPStatus property.</param>
+        /// <returns></returns>
+        private WHResponse FormatQueryResults(IEnumerable<Document> docs, ReturnType returnType, WHResponse.ResponseCodes responseCode = WHResponse.ResponseCodes.SuccessGetOrUpdate)
+        {
+            //if no document exists
+            if (docs == null)
+            {
+                //return not found
+                return new WHResponse(WHResponse.ResponseCodes.NotFound, null);
+            }
+            else
+            {
+                if (returnType == ReturnType.XMLstring)
+                {
+                    //return success as formatted XML string
+                    return new WHResponse(responseCode,
+                        JsonConvert.DeserializeXmlNode(string.Concat(JSON_ROOT, JsonConvert.SerializeObject(docs).ToString(), "}}")).InnerXml,
+                        false, null, null, WHResponse.ContentType.XML, docs.First().SelfLink, null, null, docs.Count());
+                }
+                else
+                {
+                    //if only one document, handle json serialization separately
+                    if (docs.Count() == 1)
+                    {
+                        //return success as json (only serialize first node to avoid sending an array with one element - causes issues in later json handling)
+                        return new WHResponse(responseCode, JsonConvert.SerializeObject(docs.First()),
+                            false, null, null, WHResponse.ContentType.JSON, docs.First().SelfLink, null, null, docs.Count());
+                    }
+                    else
+                    {
+                        //return success as json
+                        return new WHResponse(responseCode, JsonConvert.SerializeObject(docs),
+                            false, null, null, WHResponse.ContentType.JSON, docs.First().SelfLink, null, null, docs.Count());
+                    }
+                }
+            }
+        }
+
+        private IQueryable<Document> GetDocuments(object queryExp, FeedOptions feedOpt = null)
+        {
+            try
+            {
+                //if query is string, execute and return
+                if (queryExp is string)
+                {
+                    string sqlString = queryExp as string;
+                    return Client.CreateDocumentQuery<Document>(CollectionID, sqlString, feedOpt);
+                }
+                else
+                {
+                    //if query is lambda expression, execute and return
+                    if (queryExp is Expression<Func<Document, bool>>)
+                    {
+                        Expression<Func<Document, bool>> lambdaExp = queryExp as Expression<Func<Document, bool>>;
+                        return Client.CreateDocumentQuery<Document>(CollectionID, feedOpt).Where(lambdaExp);
+                    }
+                }
+                // return empty set if not sql or lambda
+                return null;
+            }
+            catch (Exception)
+            {
+                throw;
+            }
+        }
+        #endregion
     }
 
     public class WHResponse
     {
+        #region Enumerations
         /// <summary>
         /// Enumerated HTTP response codes for Wellhub Response data transfer objects.
         /// </summary>
         public enum ResponseCodes : int
         {
             //response codes are same as for Microsoft DocumentDB public API
-            SuccessGet = 200,           //HTTP ok
+            SuccessGetOrUpdate = 200,   //HTTP ok
             SuccessAdd = 201,           //HTTP created
-            SuccessUpdate = 200,        //HTTP ok
             SuccessDelete = 204,        //HTTP no content     
-            NotFound = 404,             //HTTP not found 
             BadRequest = 400,           //HTTP bad request
             Unauthorized = 401,         //HTTP unauthorized
-            Forbidden = 403             //HTTP forbidden
+            Forbidden = 403,            //HTTP forbidden
+            NotFound = 404,             //HTTP not found 
+            Conflict = 409,             //HTTP conflict
+            TooLarge = 413              //HTTP entity too large
         }
+        
         /// <summary>
         /// Enumerated content types for Return property of Wellhub Response data transfer objects.
         /// </summary>
@@ -579,6 +658,9 @@ namespace Wellhub
             PNG = 6,
             PDF = 7
         }
+        #endregion
+
+        #region Constructor and Properties
         public ResponseCodes HTTPStatus { get; set; }
         public string Return { get; set; }
         public bool HasError { get; set; }
@@ -623,7 +705,9 @@ namespace Wellhub
             Continuation = respCont;
             Count = docCount;
         }
+        #endregion
 
+        #region Private Internal Use Methods
         private string Content(ContentType intContent)
         {
             switch (intContent)
@@ -648,5 +732,6 @@ namespace Wellhub
                     return "text/plain";
             }
         }
+        #endregion
     }
 }
