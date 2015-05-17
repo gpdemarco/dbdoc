@@ -21,13 +21,14 @@
 
             try
             {
-                RunAddDocAsync();
+                //RunAddDocAsync();
                 //RunDelDocAsync();
                 //RunDelBatchAsync();
                 //RunAddBatchAsync();
                 //RunGetDocByID();
                 //RunGetDocFeedAsync();
                 //RunReplaceDocAsync();
+                RunReplaceBatchAsync();
 
             }
             catch (Exception)
@@ -42,12 +43,12 @@
             {
                 DocHandler handler = new DocHandler();
                 string[] batch = 
-                    { "52f54f99-514f-4346-a8ff-f021a09113b2",
-                    "3e8b3a8c-126c-46bf-8c22-80b2f9bfbc93",
-                    "3e8b3a8c-126c-46bf-8c22-80b2f9bfbc93",
-                    "2005165c-624d-4fd0-8c1e-49b8b888999e",
+                    { "6f654eb7-569c-4de9-95c6-0bda12417f4b",
+                    "84424d92-a98e-4a36-9cfc-cfa8a9a8d43b",
+                    "2e6dbab8-cbce-4643-8fdc-9d7ca9ba2bbe",
+                    "605e8af8-67f6-41e9-a04a-50d871e18cb7",
                     "e4346009-05a4-4852-85fc-371cab3ca39e",
-                    "161a4478-cc71-40d3-acb8-753696d98e5d"
+                    "674995f0-a42e-4d24-8f66-2304e4a20385"
                 };
                 Task<List<WHResponse>> taskTest = handler.DeleteBatchAsync(batch.ToList());
                 Task.WaitAll(taskTest);
@@ -264,6 +265,19 @@
             Task.WaitAll(taskTest);
             respObj = taskTest.Result;
 
+            //replace with no self-id - fails because document is not type Document
+            code["checking3"] = DateTime.Now;
+            taskTest = handler.ReplaceDocAsync(code);
+            Task.WaitAll(taskTest);
+            respObj = taskTest.Result;
+
+            //replace with no self-id - fails because document is not type Document
+            code["checking3"] = DateTime.Now;
+            Document newDoc = code.ToObject<Document>();
+            taskTest = handler.ReplaceDocAsync(newDoc);
+            Task.WaitAll(taskTest);
+            respObj = taskTest.Result;
+
             //replace with conflict - should fail - id is taken by another document
             code["checking3"] = 111;
             code["id"] = "ead28a30-7104-47c5-8691-eef70dad61f2";
@@ -276,6 +290,38 @@
             taskTest = handler.ReplaceDocAsync(code, "dbs/EPNLAA==/colls/EPNLAOgLWAA=/docs/EPNLAOgLWAAHAAAAAAAAAA=6/");
             Task.WaitAll(taskTest);
             respObj = taskTest.Result;
+        }
+        private static void RunReplaceBatchAsync()
+        {
+            //regular replace
+            DocHandler handler = new DocHandler();
+            List<Document> newDocs = new List<Document>();
+            string savedID = "a012d1c9-398a-48da-95a7-d3f5f94e4d69";
+            WHResponse respObj = handler.GetDocByID(savedID);
+            JObject code = JObject.Parse(respObj.Return);
+            code["replbatch"] = DateTime.Now;
+            newDocs.Add(code.ToObject<Document>());
+
+            savedID = "8324db59-dbce-4804-b0af-3f774551c35a";
+            respObj = handler.GetDocByID(savedID);
+            code = JObject.Parse(respObj.Return);
+            code["replbatch"] = DateTime.Now;
+            newDocs.Add(code.ToObject<Document>());
+
+            savedID = "21ad3b66-d3ec-4204-8617-c03ddb0ded31";
+            respObj = handler.GetDocByID(savedID);
+            code = JObject.Parse(respObj.Return);
+            code["replbatch"] = DateTime.Now;
+            newDocs.Add(code.ToObject<Document>());
+
+            code["id"] = "ead28a30-7104-47c5-8691-eef70dad61f2";  //should fail
+            newDocs.Add(code.ToObject<Document>());
+
+            Task<List<WHResponse>> taskTest = handler.ReplaceBatchAsync(newDocs);
+            Task.WaitAll(taskTest);
+            List<WHResponse> respList = taskTest.Result;
+
+
         }
     }
 }

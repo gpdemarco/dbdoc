@@ -4,13 +4,10 @@ using Microsoft.Azure.Documents.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Configuration;
-using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
 
@@ -23,6 +20,7 @@ namespace Wellhub
     public class DocHandler
     {
         #region Constants and Variables
+
         const string ENDPT = "serviceEndpoint";             // Azure service endpoint for DocumentDB - used to read app.config variable
         const string AUTHKEY = "authKey";                   // Azure authorization key for DocumentDB - used to read app.config variable
         const string COLL_SELFID = "collectionSelfID";      // collection in DocumentDB - used to read app.config variable
@@ -36,8 +34,6 @@ namespace Wellhub
         const string BAD_STRING = "Invalid string passed, will not serialize to JSON or XML. Raw string should be JSON or XML syntax.";
         const string BAD_COLL_ID = "Cannot open document collection with collection ID given: ";
         const string EMPTY_ID = "The request did not specify a document ID. ";
-
-        //Other constants
         const string DOC_ERR_MSG = "The Document Client could not be created from stored credentials.  ";
         const string END_PT_MSG = "The DocumentDB end point is not specified.  ";
         const string AUTH_KEY_MSG = "The DocumentDB authorization key is not specified.  ";
@@ -47,11 +43,14 @@ namespace Wellhub
         const string ERR_TYPE = "Error type: ";
         const string MSG_TEXT = ", Message: ";
         const string BASE_MSG_TEXT = ", BaseMessage: ";
+        const string CONFLICT_MSG = "There is already a document in the database with this ID but a different SelfID.  ";
+        const string NOTFOUND_MSG = "There is no document with the specified SelfID.  ";
+        const string NO_SELF_ID = "The SelfID cannot be blank unless the replacement object is a Document with a SelfID set in the SelfID property.  ";
+
+        //Other constants
         const string CONFLICT_TEXT_REPL = "specified id or name already exists";
         const string CONFLICT_TEXT_ADD = "already taken";
-        const string CONFLICT_MSG = "There is already a document in the database with this ID but a different SelfID.  ";
         const string NOTFOUND_TEXT = "is invalid";
-        const string NOTFOUND_MSG = "There is no document with the specified SelfID.  ";
 
         //other constants
         const string EMPTY_DOC = "{}";
@@ -172,13 +171,14 @@ namespace Wellhub
 
         #region Enumerations
         /// <summary>
-        /// Return types from DocOpsAsync, internal method to determine input type and interact with database
+        /// Operations type for DocOpsAsync and RunBatchAsync
         /// </summary>
         private enum OpsType : int
         {
             AddDoc = 0,
             UpdateDoc = 1,
-            ReplaceDoc = 2
+            ReplaceDoc = 2,
+            DeleteDoc = 3
         }
 
         /// <summary>
@@ -192,7 +192,9 @@ namespace Wellhub
         #endregion
 
         #region Public Methods
+
         #region Add Methods
+
         /// <summary>
         /// Adds a document to the database and returns ID of new document.
         /// </summary>
@@ -211,37 +213,13 @@ namespace Wellhub
         /// <returns>List(string) of status codes (204=success, 404=not found, 500=error)</returns>
         public async Task<List<WHResponse>> AddBatchAsync(IEnumerable<object> newDocColl)
         {
-            try
-            {
-                // create a query to get each doc object from collection submitted
-                IEnumerable<Task<WHResponse>> addQuery = from docObj in newDocColl select AddDocAsync(docObj);
-
-                // execute the query into an array of tasks 
-                Task<WHResponse>[] addTasks = addQuery.ToArray();
-
-                // load the results of each task into an array
-                WHResponse[] results = await Task.WhenAll(addTasks);
-
-                // iterate array to list for performance
-                List<WHResponse> respList = new List<WHResponse>();
-                for (int i = 0; i < results.Length; i++)
-                {
-                    respList.Add(results[i]);
-                }
-                //return results as a list
-                return respList;
-            }
-            catch (Exception ex)
-            {
-                // return bad request
-                List<WHResponse> respList = new List<WHResponse>();
-                respList.Add(new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex));
-                return respList;
-            }
+            // return from the batch runner
+            return await RunBatchAsync(newDocColl, OpsType.AddDoc);
         }
         #endregion
 
-        #region Read Methods
+        #region Get Methods
+
         /// <summary>
         /// Get documents using SQL string.  Returns JSON array of documents or XML document.
         /// </summary>
@@ -283,7 +261,7 @@ namespace Wellhub
         }
         
         /// <summary>
-        /// Get single document using document ID.  Returns JSON array of documents or XML document.
+        /// Get single document using document ID.  Returns JSON array of documents or XML document in Return property.  SelfID is in the Link property.
         /// </summary>
         /// <param name="docID">ID of the document to return.</param>
         /// <param name="returnType">Enumerated return type, default is JSON.</param>
@@ -311,15 +289,28 @@ namespace Wellhub
         #endregion
 
         #region Replace Methods
+
         /// <summary>
         /// Replace a document in the database with a new document
         /// </summary>
         /// <param name="newDoc">The document to be created. Can be anything that evaluates to JSON: a JSON document or string, XML document or string, 
         /// a POCO (plain old CLR object), or just a string that converts to JSON.</param>
-        /// <param name="selfID">The selfID of the document to be replaced. </param> 
+        /// <param name="selfID">The selfID of the document to be replaced. Can be blank if newDoc parm contains a Document object with a valid SelfID property.</param> 
         /// <returns></returns>
-        public async Task<WHResponse> ReplaceDocAsync(object newDoc, string selfID)
+        public async Task<WHResponse> ReplaceDocAsync(object newDoc, string selfID = null)
         {
+            // if selfID is blank and newDoc is a Document, try to set the selfID from newDoc
+            if (selfID == null)
+                if (newDoc is Document)
+                {
+                    Document chkDoc = newDoc as Document;
+                    selfID = chkDoc.SelfLink;
+                }
+                else 
+                {
+                    // return bad request
+                    return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, NO_SELF_ID);
+                }
             try
             {
                 //replace document
@@ -332,7 +323,16 @@ namespace Wellhub
             }
         }
 
-        //public void ReplaceBatchAsync(DbDocumentCollection newDocBatch);
+        /// <summary>
+        /// Replace a batch of documents. Returns a List of WHReponse objects.
+        /// </summary>
+        /// <param name="newDocColl">IEnumerable(object) of Documents objects that have SelfID set in each. If unknown, getDocByID returns SelfID in the Link property. </param>
+        /// <returns>List of WHResponse objects with results in each.</returns>
+        public async Task<List<WHResponse>> ReplaceBatchAsync(IEnumerable<Document> newDocColl)
+        {
+            // return from the batch runner
+            return await RunBatchAsync(newDocColl, OpsType.ReplaceDoc);
+        }
         #endregion
 
         #region Update Methods
@@ -350,6 +350,7 @@ namespace Wellhub
         #endregion
 
         #region Delete Methods
+
         /// <summary>
         /// Deletes a document from the database and returns HTTP status code of operation (204=success, 404=not found).
         /// </summary>
@@ -401,39 +402,14 @@ namespace Wellhub
         /// <returns>List(int) of status codes (204=success, 404=not found, 500=error)</returns>
         public async Task<List<WHResponse>> DeleteBatchAsync(List<string> docIDs)
         {
-            try
-            {
-                // create a query to get each doc ID from list submitted
-                IEnumerable<Task<WHResponse>> delQuery = from docID in docIDs select DeleteDocAsync(docID);
-
-                // execute the query into an array of tasks 
-                Task<WHResponse>[] deleteTasks = delQuery.ToArray();
-
-                // load the results of each task into an array
-                WHResponse[] results = await Task.WhenAll(deleteTasks);
-
-                // iterate array to list for performance
-                List<WHResponse> respList = new List<WHResponse>();
-                for (int i = 0; i < results.Length; i++)
-                {
-                    respList.Add(results[i]);
-                }
-
-                //return results as a list
-                return results.ToList();
-            }
-            catch (Exception ex)
-            {
-                // return bad request
-                List<WHResponse> respList = new List<WHResponse>();
-                respList.Add(new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex));
-                return respList;
-            }
+            // return from the batch runner
+            return await RunBatchAsync(docIDs, OpsType.DeleteDoc);
         }
         #endregion
         #endregion
 
         #region Private Internal Use Methods
+
         /// <summary>
         /// Perform document operation (add, update or replace) on the database.
         /// </summary>
@@ -619,6 +595,60 @@ namespace Wellhub
             catch (Exception)
             {
                 throw;
+            }
+        }
+        private async Task<List<WHResponse>> RunBatchAsync(IEnumerable<object> batch, OpsType operation)
+        {
+            try
+            {
+                //initialize query object
+                IEnumerable<Task<WHResponse>> iQuery = null;
+
+                // create a query to get each doc object from collection submitted (cannot use switch due to select statement)
+                if (operation == OpsType.AddDoc)
+                {
+                    iQuery = from docObj in batch select AddDocAsync(docObj); 
+                }
+                else
+                {
+                    if (operation == OpsType.DeleteDoc)
+                    {
+                        iQuery = from docID in (batch as List<string>) select DeleteDocAsync(docID);
+                    }
+                    else
+                    {
+                        if (operation == OpsType.ReplaceDoc)
+                        {
+                            iQuery = from docObj in batch select ReplaceDocAsync(docObj);
+                        }
+                        else        //(operation == OpsType.UpdateDoc)
+                        {
+                            //iQuery = from docObj in batch select UpdateDocAsync(docObj); 
+                        }
+                    }
+                }
+                
+                // execute the query into an array of tasks 
+                Task<WHResponse>[] iTasks = iQuery.ToArray();
+
+                // load the results of each task into an array
+                WHResponse[] results = await Task.WhenAll(iTasks);
+
+                // iterate array to list for performance
+                List<WHResponse> respList = new List<WHResponse>();
+                for (int i = 0; i < results.Length; i++)
+                {
+                    respList.Add(results[i]);
+                }
+                //return results as a list
+                return respList;
+            }
+            catch (Exception ex)
+            {
+                // return bad request
+                List<WHResponse> respList = new List<WHResponse>();
+                respList.Add(new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex));
+                return respList;
             }
         }
         #endregion
