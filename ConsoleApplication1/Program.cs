@@ -1,10 +1,12 @@
 ﻿namespace ConsoleApplication1
 {
     using Microsoft.Azure.Documents;
+    using Microsoft.Azure.Documents.Client;
     using Newtonsoft.Json;
     using Newtonsoft.Json.Linq;
     using System;
     using System.Collections.Generic;
+    using System.Configuration;
     using System.IO;
     using System.Linq;
     using System.Linq.Expressions;
@@ -27,8 +29,8 @@
                 //RunAddBatchAsync();
                 //RunGetDocByID();
                 //RunGetDocFeedAsync();
-                //RunReplaceDocAsync();
-                RunReplaceBatchAsync();
+                RunReplaceDocAsync();
+                //RunReplaceBatchAsync();
 
             }
             catch (Exception)
@@ -265,13 +267,13 @@
             Task.WaitAll(taskTest);
             respObj = taskTest.Result;
 
-            //replace with no self-id - fails because document is not type Document
+            //replace with no self-id - fails because document is not type Document     //where is not found error?
             code["checking3"] = DateTime.Now;
             taskTest = handler.ReplaceDocAsync(code);
             Task.WaitAll(taskTest);
             respObj = taskTest.Result;
 
-            //replace with no self-id - fails because document is not type Document
+            //no self-id - succeeds because document is type Document
             code["checking3"] = DateTime.Now;
             Document newDoc = code.ToObject<Document>();
             taskTest = handler.ReplaceDocAsync(newDoc);
@@ -285,7 +287,7 @@
             Task.WaitAll(taskTest);
             respObj = taskTest.Result;
 
-            //replace with bad selfID - should fail 
+            //replace with bad selfID - should fail for document not found
             code["id"] = savedID;
             taskTest = handler.ReplaceDocAsync(code, "dbs/EPNLAA==/colls/EPNLAOgLWAA=/docs/EPNLAOgLWAAHAAAAAAAAAA=6/");
             Task.WaitAll(taskTest);
@@ -323,5 +325,30 @@
 
 
         }
+        //private void CreateTrigger()
+        //{
+
+        //    DocHandler handler = new DocHandler();
+        //    DocumentClient client = handler.Client;
+
+        //    // 1. Create a trigger.
+        //    string triggerId = "CanonicalizeSchedule";
+        //    string body = File.ReadAllText(@"JS\CanonicalizeSchedule.js");
+        //    Trigger trigger = new Trigger
+        //    {
+        //        Id = triggerId,
+        //        Body = body,
+        //        TriggerOperation = TriggerOperation.Create,
+        //        TriggerType = TriggerType.Pre
+        //    };
+
+        //    //await TryDeleteStoredProcedure(colSelfLink, trigger.Id);
+            
+        //    Task<WHResponse> taskTest = client.CreateTriggerAsync(colSelfLink, trigger);
+        //    Task.WaitAll(taskTest);
+        //    WHResponse respObj = taskTest.Result;
+
+
+        //}
     }
 }

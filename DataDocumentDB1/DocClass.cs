@@ -14,8 +14,8 @@ using System.Xml;
 namespace Wellhub
 {
     /// <summary>
-    /// Class for interacting with Azure DocumentDB.
-    /// Service endpoint and authorization key for the database must be set in the configuration file of the calling program.
+    /// Class for interacting with Azure DocumentDB. Service endpoint and authorization key for the database must be set in the Azure app.
+    /// Collection can be passed as parameter or the class will use the default from the configuration file.  
     /// </summary>
     public class DocHandler
     {
@@ -48,11 +48,8 @@ namespace Wellhub
         const string NO_SELF_ID = "The SelfID cannot be blank unless the replacement object is a Document with a SelfID set in the SelfID property.  ";
 
         //Other constants
-        const string CONFLICT_TEXT_REPL = "specified id or name already exists";
-        const string CONFLICT_TEXT_ADD = "already taken";
-        const string NOTFOUND_TEXT = "is invalid";
-
-        //other constants
+        const string CONFLICT_TEXT = "conflict";
+        const string NOTFOUND_TEXT = "notfound";
         const string EMPTY_DOC = "{}";
 
         //variables used throughout program 
@@ -61,7 +58,8 @@ namespace Wellhub
 
         #endregion
 
-        #region Constructor and Properties        
+        #region Constructor and Class Properties
+
         /// <summary>
         /// Returns the collection ID
         /// </summary>
@@ -71,6 +69,7 @@ namespace Wellhub
         {
             get
             {
+                //if there is no client yet
                 if (client == null)
                 {
                     try
@@ -336,17 +335,10 @@ namespace Wellhub
         #endregion
 
         #region Update Methods
-        ////update documents
-        //public void UpdateDoc(DbDocument newDoc);
-        //public void UpdateDoc(IEnumerable<JObject> docJSON);
-        //public void UpdateDoc(XmlDocument docXML);
-        //public void UpdateDoc(string docID, string[] propValueArray);
 
-        ////update documents
+        //public void UpdateDoc(DbDocument newDoc);
+
         //public Task<List<string>> UpdateBatchAsync(DbDocumentCollection newDocBatch);
-        //public Task<List<string>> UpdateBatchAsync(IEnumerable<JObject> docJSONBatch);
-        //public Task<List<string>> UpdateBatchAsync(XmlDocument docXMLBatch);
-        //public Task<List<string>> UpdateBatchAsync(string[] updateArray);
         #endregion
 
         #region Delete Methods
@@ -486,18 +478,23 @@ namespace Wellhub
                                 return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, BAD_STRING);
                         }
                     }
-                    catch (Exception ex)
+                    catch (DocumentClientException docEx)
                     {
                         // if there is a conflict, return error message
-                        if (ex.Message.ToString().Contains(CONFLICT_TEXT_REPL) | ex.Message.ToString().Contains(CONFLICT_TEXT_ADD))
+                        if (docEx.Error.Code.ToLower() == CONFLICT_TEXT)
                         {
-                            return new WHResponse(WHResponse.ResponseCodes.Conflict, newDoc.ToString(), true, string.Concat(CONFLICT_MSG, ex.Message), ex, WHResponse.ContentType.Text);
+                            return new WHResponse(WHResponse.ResponseCodes.Conflict, newDoc.ToString(), true, string.Concat(CONFLICT_MSG, docEx.Message), docEx, WHResponse.ContentType.Text);
                         }
                         // if document not found, return error message
-                        if (ex.Message.ToString().Contains(NOTFOUND_TEXT))
+                        if (docEx.Error.Code.ToLower() == NOTFOUND_TEXT)
                         {
-                            return new WHResponse(WHResponse.ResponseCodes.NotFound, newDoc.ToString(), true, string.Concat(NOTFOUND_MSG, ex.Message), ex, WHResponse.ContentType.Text);
+                            return new WHResponse(WHResponse.ResponseCodes.NotFound, newDoc.ToString(), true, string.Concat(NOTFOUND_MSG, docEx.Message), docEx, WHResponse.ContentType.Text);
                         }
+                        //throw any other exceptions
+                        throw;
+                    }
+                    catch (Exception)
+                    {
                         //throw any other exceptions
                         throw;
                     }
@@ -597,13 +594,20 @@ namespace Wellhub
                 throw;
             }
         }
+
+        /// <summary>
+        /// Process batch for CRUD operations.  All batches are run the same way.
+        /// </summary>
+        /// <param name="batch">Object submitted to perform the operation.  Differs for each operation, see non-batch methods for specific type required. </param>
+        /// <param name="operation">Enumerated type of operation to run.</param>
+        /// <returns></returns>
         private async Task<List<WHResponse>> RunBatchAsync(IEnumerable<object> batch, OpsType operation)
         {
             try
             {
                 //initialize query object
                 IEnumerable<Task<WHResponse>> iQuery = null;
-
+                
                 // create a query to get each doc object from collection submitted (cannot use switch due to select statement)
                 if (operation == OpsType.AddDoc)
                 {
@@ -656,41 +660,7 @@ namespace Wellhub
 
     public class WHResponse
     {
-        #region Enumerations
-        /// <summary>
-        /// Enumerated HTTP response codes for Wellhub Response data transfer objects.
-        /// </summary>
-        public enum ResponseCodes : int
-        {
-            //response codes are same as for Microsoft DocumentDB public API
-            SuccessGetOrUpdate = 200,   //HTTP ok
-            SuccessAdd = 201,           //HTTP created
-            SuccessDelete = 204,        //HTTP no content     
-            BadRequest = 400,           //HTTP bad request
-            Unauthorized = 401,         //HTTP unauthorized
-            Forbidden = 403,            //HTTP forbidden
-            NotFound = 404,             //HTTP not found 
-            Conflict = 409,             //HTTP conflict
-            TooLarge = 413              //HTTP entity too large
-        }
-        
-        /// <summary>
-        /// Enumerated content types for Return property of Wellhub Response data transfer objects.
-        /// </summary>
-        public enum ContentType : int
-        {
-            Text = 0,
-            JSON = 1,
-            XML = 2,
-            HTML = 3,
-            JPG = 4,
-            GIF = 5,
-            PNG = 6,
-            PDF = 7
-        }
-        #endregion
-
-        #region Constructor and Properties
+        #region Constructor and Class Properties
         public ResponseCodes HTTPStatus { get; set; }
         public string Return { get; set; }
         public bool HasError { get; set; }
@@ -734,6 +704,40 @@ namespace Wellhub
             AttachmentLink = attLink;
             Continuation = respCont;
             Count = docCount;
+        }
+        #endregion
+
+        #region Enumerations
+        /// <summary>
+        /// Enumerated HTTP response codes for Wellhub Response data transfer objects.
+        /// </summary>
+        public enum ResponseCodes : int
+        {
+            //response codes are same as for Microsoft DocumentDB public API
+            SuccessGetOrUpdate = 200,   //HTTP ok
+            SuccessAdd = 201,           //HTTP created
+            SuccessDelete = 204,        //HTTP no content     
+            BadRequest = 400,           //HTTP bad request
+            Unauthorized = 401,         //HTTP unauthorized
+            Forbidden = 403,            //HTTP forbidden
+            NotFound = 404,             //HTTP not found 
+            Conflict = 409,             //HTTP conflict
+            TooLarge = 413              //HTTP entity too large
+        }
+        
+        /// <summary>
+        /// Enumerated content types for Return property of Wellhub Response data transfer objects.
+        /// </summary>
+        public enum ContentType : int
+        {
+            Text = 0,
+            JSON = 1,
+            XML = 2,
+            HTML = 3,
+            JPG = 4,
+            GIF = 5,
+            PNG = 6,
+            PDF = 7
         }
         #endregion
 
