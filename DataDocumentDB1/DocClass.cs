@@ -1,14 +1,13 @@
-﻿using Microsoft.Azure.Documents;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.Azure.Documents;
 using Microsoft.Azure.Documents.Client;
 using Microsoft.Azure.Documents.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using System;
-using System.Collections.Generic;
-using System.Configuration;
-using System.Linq;
 using System.Linq.Expressions;
-using System.Threading.Tasks;
 using System.Xml;
 
 namespace Wellhub
@@ -21,10 +20,6 @@ namespace Wellhub
     {
         #region Constants and Variables
 
-        const string ENDPT = "serviceEndpoint";             // Azure service endpoint for DocumentDB - used to read app.config variable
-        const string AUTHKEY = "authKey";                   // Azure authorization key for DocumentDB - used to read app.config variable
-        const string COLL_SELFID = "collectionSelfID";      // collection in DocumentDB - used to read app.config variable
-
         //root node added to json to convert to well-formed XML with namespace
         const string JSON_ROOT = "{'?xml': {'@version': '1.0','@standalone': 'no'}, 'whResponse' : { '@xmlns' : 'http://well-hub.com', 'whDocument' :";
 
@@ -35,8 +30,7 @@ namespace Wellhub
         const string BAD_COLL_ID = "Cannot open document collection with collection ID given: ";
         const string EMPTY_ID = "The request did not specify a document ID. ";
         const string DOC_ERR_MSG = "The Document Client could not be created from stored credentials.  ";
-        const string END_PT_MSG = "The DocumentDB end point is not specified.  ";
-        const string AUTH_KEY_MSG = "The DocumentDB authorization key is not specified.  ";
+        const string CREDENTIAL_MSG = "Endpoint, authorization key and either collection selfID or database and collection names must be specified.  ";
         const string AGG_ERR_MSG = " Errors Occurred. ";
         const string STAT_TEXT = ", StatusCode: ";
         const string ACT_TEXT = ", Activity id: ";
@@ -46,14 +40,20 @@ namespace Wellhub
         const string CONFLICT_MSG = "There is already a document in the database with this ID but a different SelfID.  ";
         const string NOTFOUND_MSG = "There is no document with the specified SelfID.  ";
         const string NO_SELF_ID = "The SelfID cannot be blank unless the replacement object is a Document with a SelfID set in the SelfID property.  ";
+        const string DB_INVALID = "The database specified does not exist or could not be opened with the credentials submitted. ";
+        const string COLL_INVALID = "The collection specified does not exist or could not be opened with the credentials submitted. ";
 
         //Other constants
         const string CONFLICT_TEXT = "conflict";
         const string NOTFOUND_TEXT = "notfound";
         const string EMPTY_DOC = "{}";
 
-        //variables used throughout program 
-        private static string collID;                       //default collection ID if one is not passed
+        //variables used throughout program
+        private static Uri endPt;                        //azure endpoint for DocDB database
+        private static string authKey;                      //azure authorization key for DocDB database 
+        private static string collID;                       //collection selfID
+        private static string dbName;                       //database name if collection selfID is not passed
+        private static string collName;                     //collection name if collection selfID is not passed
         private static DocumentClient client;               //document client - created once per instance for performance
 
         #endregion
@@ -61,9 +61,25 @@ namespace Wellhub
         #region Constructor and Class Properties
 
         /// <summary>
-        /// Returns the collection ID
+        /// Returns the collection SelfID.  Must be set in the constructor directly or using the database and collection names.
         /// </summary>
         public static string CollectionID { get { return collID; } }
+        /// <summary>
+        /// Returns the DocumentDB endpoint.  Must be set in the constructor.
+        /// </summary>
+        public static Uri EndPoint { get { return endPt; } }
+        /// <summary>
+        /// Returns the DocumentDB authorization key.  Must be set in the constructor.
+        /// </summary>
+        public static string AuthorizationKey { get { return authKey; } }
+        /// <summary>
+        /// Returns the DocumentDB database name.  Can be set in the constructor. Not required or populated if collection selfID is used in constructor.
+        /// </summary>
+        public static string DBName { get { return dbName; } }
+        /// <summary>
+        /// Returns the DocumentDB collection name.  Can be set in the constructor. Not required or populated if collection selfID is used in constructor.
+        /// </summary>
+        public static string CollectionName { get { return collName; } }
 
         private static DocumentClient Client
         {
@@ -75,8 +91,7 @@ namespace Wellhub
                     try
                     {
                         // create an instance of DocumentClient from from settings in config file
-                        client = new DocumentClient(new Uri(ConfigurationManager.AppSettings[ENDPT]),
-                                    ConfigurationManager.AppSettings[AUTHKEY],
+                        client = new DocumentClient(EndPoint, AuthorizationKey,
                                     new ConnectionPolicy
                                     {
                                         ConnectionMode = ConnectionMode.Direct,
@@ -87,18 +102,6 @@ namespace Wellhub
                     }
                     catch (DocumentClientException docEx)
                     {
-                        //if endpoint not specified throw an error 
-                        if (string.IsNullOrEmpty(ConfigurationManager.AppSettings[ENDPT]))
-                        {
-                            throw new ApplicationException(END_PT_MSG);
-                        }
-
-                        //if authkey not specified throw an error 
-                        if (string.IsNullOrEmpty(ConfigurationManager.AppSettings[AUTHKEY]))
-                        {
-                            throw new ApplicationException(AUTH_KEY_MSG);
-                        }
-
                         // get base exception 
                         Exception baseException = docEx.GetBaseException();
 
@@ -152,19 +155,107 @@ namespace Wellhub
         /// <summary>
         /// Creates an object for interacting with Azure DocumentDB.
         /// </summary>
-        public DocHandler()
+        /// <param name="endPoint">The endpoint of the Azure DocumentDB. </param>
+        /// <param name="authorizationKey">The authorization key of the Azure DocumentDB. </param>
+        /// <param name="collSelfId">SelfID of the DocDB Collection to use for interaction. </param>
+        public DocHandler(Uri endPoint, string authorizationKey, string collSelfId)
         {
-            collID = ConfigurationManager.AppSettings[COLL_SELFID];
+            //if endpoint, authkey or collectionID not specified throw an error 
+            if (string.IsNullOrEmpty(authorizationKey) | string.IsNullOrEmpty(collSelfId) | endPoint == null)
+            {
+                throw new ApplicationException(CREDENTIAL_MSG);
+            }
+            else
+            {
+                // set properties from parameters
+                endPt = endPoint;
+                authKey = authorizationKey;
+                collID = collSelfId;
+
+                try
+                {
+                    //initialize client
+                    DocumentClient testClient = Client;
+
+                    //validate collection id
+                    Task<ResourceResponse<DocumentCollection>> coll = Client.ReadDocumentCollectionAsync(collID);
+                    Task.WaitAll(coll);
+                    if (coll.Status != TaskStatus.RanToCompletion)
+                    {
+                        throw new ApplicationException(COLL_INVALID);
+                    }
+                }
+                catch (Exception)
+                {
+                    //remove settings and throw any exception encountered
+                    Dispose();
+                    throw;
+                }
+            }
         }
 
         /// <summary>
         /// Creates an object for interacting with Azure DocumentDB.
         /// </summary>
-        /// <param name="collSelfId">SelfID of the DocDB Collection to use for interaction. </param>
-        public DocHandler(string collSelfId)
+        /// <param name="endPoint">The endpoint of the Azure DocumentDB. </param>
+        /// <param name="authorizationKey">The authorization key of the Azure DocumentDB. </param>
+        /// <param name="databaseName">Name of the DocDB database to use for interaction. </param>
+        /// <param name="collectionName">Name of the collection in the DocDB database to use for interaction. </param>
+        public DocHandler(Uri endPoint, string authorizationKey, string databaseName, string collectionName)
         {
-            // if collection ID is passed, set the property
-            collID = collSelfId;
+            //if endpoint, authkey or collectionID not specified throw an error 
+            if (string.IsNullOrEmpty(authorizationKey) | string.IsNullOrEmpty(databaseName) | string.IsNullOrEmpty(collectionName) | endPoint == null)
+            {
+                throw new ApplicationException(CREDENTIAL_MSG);
+            }
+            else
+            {
+                // set properties from parameters
+                endPt = endPoint;
+                authKey = authorizationKey;
+                dbName = databaseName;
+                collName = collectionName;
+
+                try
+                {
+                    //get the database
+                    Database db = Client.CreateDatabaseQuery().Where(d => d.Id == databaseName).ToArray().FirstOrDefault();
+                    if (db == null)
+                    {
+                        throw new ApplicationException(DB_INVALID);
+                    }
+                    else
+                    {
+                        DocumentCollection coll = Client.CreateDocumentCollectionQuery(db.SelfLink).Where(c => c.Id == collectionName).ToArray().FirstOrDefault();
+                        if (coll == null)
+                        {
+                            throw new ApplicationException(COLL_INVALID);
+                        }
+                        else
+                        {
+                            collID = coll.SelfLink;
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    // remove settings and throw any exception encountered
+                    Dispose();
+                    throw;
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Disposes of the object by eliminating all references to existing credentials
+        /// </summary>
+        public void Dispose()
+        {
+            client = null;
+            endPt = null;
+            authKey = null;
+            dbName = null;
+            collName = null;
         }
         #endregion
 
@@ -247,7 +338,7 @@ namespace Wellhub
 
                 // convert to response format
                 WHResponse resObj = FormatQueryResults(feedResp, returnType);
-                
+
                 // store continuation token and return response object
                 resObj.Continuation = feedResp.ResponseContinuation;
                 return resObj;
@@ -258,7 +349,7 @@ namespace Wellhub
                 return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, string.Concat(BAD_QUERY, ex.Message), ex);
             }
         }
-        
+
         /// <summary>
         /// Get single document using document ID.  Returns JSON array of documents or XML document in Return property.  SelfID is in the Link property.
         /// </summary>
@@ -305,7 +396,7 @@ namespace Wellhub
                     Document chkDoc = newDoc as Document;
                     selfID = chkDoc.SelfLink;
                 }
-                else 
+                else
                 {
                     // return bad request
                     return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, NO_SELF_ID);
@@ -337,7 +428,6 @@ namespace Wellhub
         #region Update Methods
 
         //public void UpdateDoc(DbDocument newDoc);
-
         //public Task<List<string>> UpdateBatchAsync(DbDocumentCollection newDocBatch);
         #endregion
 
@@ -354,7 +444,7 @@ namespace Wellhub
             try
             {
                 //if there is a document ID
-                if (docID != "") 
+                if (docID != "")
                 {
                     // call create document method and return ID of created document
                     IEnumerable<Document> delDocs = Client.CreateDocumentQuery(CollectionID).Where(d => d.Id == docID).AsEnumerable();
@@ -387,6 +477,7 @@ namespace Wellhub
                 return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, ex.Message, ex);
             }
         }
+
         /// <summary>
         /// Delete a batch of documents. Returns List of status codes (204=success, 404=not found, 500=error) in same order as submitted IDs.
         /// </summary>
@@ -464,7 +555,7 @@ namespace Wellhub
                                 // call create document method and return ID of created document
                                 Document created = await Client.CreateDocumentAsync(CollectionID, newDoc);
                                 return new WHResponse(WHResponse.ResponseCodes.SuccessAdd, created.Id, false, null, null, WHResponse.ContentType.Text, created.SelfLink);
-                        
+
                             //case OpsType.UpdateDoc:
                             //    break;
 
@@ -505,22 +596,9 @@ namespace Wellhub
                 // return invalid client
                 return new WHResponse(WHResponse.ResponseCodes.BadRequest, null, true, appEx.Message, appEx);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                string msg = "";
-
-                //if document client is not null
-                if (client != null)
-                {
-                    //check to see if collection id is valid
-                    ResourceResponse<DocumentCollection> docCol = await client.ReadDocumentCollectionAsync(CollectionID);
-                    if (docCol == null)
-                    {
-                        msg = string.Concat(BAD_COLL_ID, CollectionID, ". ");
-                    }
-                }
-                // create message - invalid client - and throw exception
-                throw new ApplicationException(string.Concat(msg, ex.Message), ex);
+                throw;
             }
         }
 
@@ -607,11 +685,11 @@ namespace Wellhub
             {
                 //initialize query object
                 IEnumerable<Task<WHResponse>> iQuery = null;
-                
+
                 // create a query to get each doc object from collection submitted (cannot use switch due to select statement)
                 if (operation == OpsType.AddDoc)
                 {
-                    iQuery = from docObj in batch select AddDocAsync(docObj); 
+                    iQuery = from docObj in batch select AddDocAsync(docObj);
                 }
                 else
                 {
@@ -631,7 +709,7 @@ namespace Wellhub
                         }
                     }
                 }
-                
+
                 // execute the query into an array of tasks 
                 Task<WHResponse>[] iTasks = iQuery.ToArray();
 
@@ -655,6 +733,7 @@ namespace Wellhub
                 return respList;
             }
         }
+        
         #endregion
     }
 
@@ -690,7 +769,7 @@ namespace Wellhub
         /// <param name="attLink">String containing internal link to get attachment(s) of associated document if there is one.</param>
         /// <param name="respCont">String containing response continuation key for paging operations (used to get next page).</param>
         /// <param name="docCount">Integer showing how many documents are in Return.</param>
-        public WHResponse(ResponseCodes status, string body, bool hasErr = false, string errMsg = null, Exception innerEx = null, 
+        public WHResponse(ResponseCodes status, string body, bool hasErr = false, string errMsg = null, Exception innerEx = null,
             ContentType contentType = ContentType.Text, string link = null, string attLink = null, string respCont = null, int docCount = 0)
         {
             //return a response object from parms
@@ -724,7 +803,7 @@ namespace Wellhub
             Conflict = 409,             //HTTP conflict
             TooLarge = 413              //HTTP entity too large
         }
-        
+
         /// <summary>
         /// Enumerated content types for Return property of Wellhub Response data transfer objects.
         /// </summary>
